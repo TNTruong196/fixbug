@@ -16,6 +16,8 @@ public:
     float getOffset() const;
     void setOffset(float val);
 
+    void parseAttributes(xml_node<>*);
+
     SVGColor getStopColor() const;
     void setStopColor(const SVGColor& val);
 

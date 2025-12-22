@@ -3,6 +3,72 @@
 //#include <algorithm>
 //#include <vector>
 //#include <cmath>
+//#include <sstream>
+//#include <string>
+//
+//using namespace std;
+//
+//// --- Helper Parser cho Transform (Xử lý rotate(a, x, y) mà parser cũ có thể thiếu) ---
+//static void applyTransformString(Gdiplus::Matrix* matrix, const string& transStr) {
+//    if (transStr.empty()) return;
+//
+//    matrix->Reset(); // Reset về Identity để parse lại từ đầu chính xác
+//
+//    string s = transStr;
+//    // Thay thế các ký tự phân cách lạ bằng khoảng trắng để dễ parse
+//    for (char& c : s) {
+//        if (c == ',' || c == '(' || c == ')') c = ' ';
+//    }
+//
+//    stringstream ss(s);
+//    string token;
+//
+//    while (ss >> token) {
+//        if (token == "matrix") {
+//            float m[6];
+//            for (int i = 0; i < 6; ++i) ss >> m[i];
+//            Gdiplus::Matrix temp(m[0], m[1], m[2], m[3], m[4], m[5]);
+//            matrix->Multiply(&temp, Gdiplus::MatrixOrderAppend);
+//        }
+//        else if (token == "translate") {
+//            float tx, ty = 0;
+//            ss >> tx;
+//            if (!(ss >> ty)) ty = 0; // ty optional
+//            matrix->Translate(tx, ty, Gdiplus::MatrixOrderAppend);
+//        }
+//        else if (token == "scale") {
+//            float sx, sy;
+//            ss >> sx;
+//            if (!(ss >> sy)) sy = sx; // sy optional defaults to sx
+//            matrix->Scale(sx, sy, Gdiplus::MatrixOrderAppend);
+//        }
+//        else if (token == "rotate") {
+//            float angle, cx = 0, cy = 0;
+//            ss >> angle;
+//            // Kiểm tra xem có cx, cy không
+//            streampos oldPos = ss.tellg();
+//            if (ss >> cx >> cy) {
+//                // Rotate(angle, cx, cy) = Translate(cx, cy) * Rotate(angle) * Translate(-cx, -cy)
+//                matrix->Translate(cx, cy, Gdiplus::MatrixOrderAppend);
+//                matrix->Rotate(angle, Gdiplus::MatrixOrderAppend);
+//                matrix->Translate(-cx, -cy, Gdiplus::MatrixOrderAppend);
+//            }
+//            else {
+//                ss.clear();
+//                ss.seekg(oldPos); // Quay lại nếu không đọc được cx, cy
+//                matrix->Rotate(angle, Gdiplus::MatrixOrderAppend);
+//            }
+//        }
+//        else if (token == "skewX") {
+//            float angle; ss >> angle;
+//            matrix->Shear(tan(angle * 3.14159265f / 180.0f), 0, Gdiplus::MatrixOrderAppend);
+//        }
+//        else if (token == "skewY") {
+//            float angle; ss >> angle;
+//            matrix->Shear(0, tan(angle * 3.14159265f / 180.0f), Gdiplus::MatrixOrderAppend);
+//        }
+//    }
+//}
 //
 //SVGRadialGradient::SVGRadialGradient() {
 //    cx = 0.5f; cy = 0.5f; r = 0.5f;
@@ -10,7 +76,7 @@
 //}
 //
 //void SVGRadialGradient::parseAttributes(xml_node<>* node) {
-//    SVGGradient::parseAttributes(node); // Parse stops, transforms, id, xlink:href
+//    SVGGradient::parseAttributes(node);
 //
 //    auto parseVal = [&](xml_attribute<>* attr, float defVal) {
 //        if (!attr) return defVal;
@@ -22,12 +88,22 @@
 //        return (float)atof(val.c_str());
 //        };
 //
-//    // Parse các thuộc tính, mặc định fx, fy theo cx, cy nếu thiếu
 //    cx = parseVal(node->first_attribute("cx"), 0.5f);
 //    cy = parseVal(node->first_attribute("cy"), 0.5f);
 //    r = parseVal(node->first_attribute("r"), 0.5f);
 //    fx = parseVal(node->first_attribute("fx"), cx);
 //    fy = parseVal(node->first_attribute("fy"), cy);
+//
+//    // QUAN TRỌNG: Re-parse gradientTransform tại chỗ để đảm bảo hỗ trợ rotate(a, x, y)
+//    // Base class có thể parse thiếu trường hợp này.
+//    if (xml_attribute<>* attr = node->first_attribute("gradientTransform")) {
+//        if (!this->gradientTransform) this->gradientTransform = new Gdiplus::Matrix();
+//        applyTransformString(this->gradientTransform, attr->value());
+//    }
+//}
+//
+//static float distSq(const Gdiplus::PointF& p1, const Gdiplus::PointF& p2) {
+//    return (p1.X - p2.X) * (p1.X - p2.X) + (p1.Y - p2.Y) * (p1.Y - p2.Y);
 //}
 //
 //Gdiplus::Brush* SVGRadialGradient::createBrush(const Gdiplus::RectF& boundingBox) {
@@ -35,59 +111,77 @@
 //        return new Gdiplus::SolidBrush(Gdiplus::Color::Black);
 //    }
 //
-//    // 1. Chuẩn bị thông số hình học gốc
 //    REAL rawCx = (REAL)cx;
 //    REAL rawCy = (REAL)cy;
 //    REAL rawR = (REAL)r;
 //    REAL rawFx = (REAL)fx;
 //    REAL rawFy = (REAL)fy;
 //
-//    // 2. Tính toán Matrix biến đổi tổng hợp
-//    Gdiplus::Matrix transformMatrix;
+//    // 1. Focal Point Clamping (Chuẩn SVG)
+//    REAL dx = rawFx - rawCx;
+//    REAL dy = rawFy - rawCy;
+//    REAL dist = sqrt(dx * dx + dy * dy);
+//    // Giữ tiêu cự nằm trong 99% bán kính để tránh lỗi GDI+
+//    if (rawR > 0 && dist >= rawR * 0.99f) {
+//        REAL scale = (rawR * 0.99f) / dist;
+//        rawFx = rawCx + dx * scale;
+//        rawFy = rawCy + dy * scale;
+//    }
 //
-//    // Áp dụng gradientTransform của SVG trước (nếu có)
+//    // 2. Build Final Matrix
+//    Gdiplus::Matrix finalMatrix;
 //    if (gradientTransform) {
-//        transformMatrix.Multiply(gradientTransform);
+//        finalMatrix.Multiply(gradientTransform);
 //    }
-//
-//    // Xử lý đơn vị toạ độ
 //    if (gradientUnits == "objectBoundingBox") {
-//        // Scale từ 0..1 lên kích thước boundingBox
-//        Gdiplus::Matrix mapMatrix;
-//        mapMatrix.Scale(boundingBox.Width, boundingBox.Height, Gdiplus::MatrixOrderAppend);
-//        mapMatrix.Translate(boundingBox.X, boundingBox.Y, Gdiplus::MatrixOrderAppend);
-//        transformMatrix.Multiply(&mapMatrix, Gdiplus::MatrixOrderAppend);
+//        finalMatrix.Scale(boundingBox.Width, boundingBox.Height, Gdiplus::MatrixOrderAppend);
+//        finalMatrix.Translate(boundingBox.X, boundingBox.Y, Gdiplus::MatrixOrderAppend);
 //    }
-//    // Nếu là userSpaceOnUse, rawCx/Cy đã là pixel, transformMatrix chỉ chứa gradientTransform.
 //
-//    // 3. KỸ THUẬT MỞ RỘNG BÁN KÍNH (INFINITE GRADIENT SIMULATION)
-//    // Để tránh việc PathGradientBrush bị cắt cụt (clipping) ở rìa hình tròn,
-//    // ta nhân bán kính lên 50 lần để brush phủ kín mọi hình dạng (Instagram box).
-//    // Màu sắc sẽ được "nén" lại vào tâm để giữ đúng tỷ lệ hiển thị.
-//    REAL expansionScale = 50.0f;
+//    // 3. Dynamic Expansion (Tự động mở rộng bán kính để không bị clipping)
+//    REAL expansionScale = 1.0f;
+//    Gdiplus::Matrix inverseMatrix;
+//    inverseMatrix.Multiply(&finalMatrix);
 //
+//    if (inverseMatrix.Invert() == Gdiplus::Status::Ok) {
+//        Gdiplus::PointF corners[4] = {
+//            Gdiplus::PointF(boundingBox.X, boundingBox.Y),
+//            Gdiplus::PointF(boundingBox.X + boundingBox.Width, boundingBox.Y),
+//            Gdiplus::PointF(boundingBox.X, boundingBox.Y + boundingBox.Height),
+//            Gdiplus::PointF(boundingBox.X + boundingBox.Width, boundingBox.Y + boundingBox.Height)
+//        };
+//        inverseMatrix.TransformPoints(corners, 4);
+//
+//        float maxDistSq = 0.0f;
+//        Gdiplus::PointF centerP(rawCx, rawCy);
+//        for (int i = 0; i < 4; i++) {
+//            float d = distSq(centerP, corners[i]);
+//            if (d > maxDistSq) maxDistSq = d;
+//        }
+//        float maxDist = sqrt(maxDistSq);
+//
+//        if (rawR > 0 && maxDist > rawR) {
+//            expansionScale = (maxDist / rawR) * 1.01f; // Padding 1%
+//        }
+//    }
+//    else {
+//        expansionScale = 2.0f; // Fallback
+//    }
+//
+//    // 4. Create Path & Brush
 //    Gdiplus::GraphicsPath path;
 //    REAL expandedR = rawR * expansionScale;
-//
-//    // Tạo hình Ellipse cực lớn
 //    path.AddEllipse(rawCx - expandedR, rawCy - expandedR, 2 * expandedR, 2 * expandedR);
+//    path.Transform(&finalMatrix);
 //
-//    // Áp dụng biến đổi (xoay/nghiêng/dịch) lên hình Ellipse lớn này
-//    path.Transform(&transformMatrix);
-//
-//    // Tạo Brush từ Path lớn
 //    Gdiplus::PathGradientBrush* pthGrBrush = new Gdiplus::PathGradientBrush(&path);
+//    pthGrBrush->SetWrapMode(Gdiplus::WrapModeClamp);
 //
-//    // Tính điểm tiêu cự (Focal Point)
-//    // Lưu ý: Focal Point cũng phải được transform nhưng KHÔNG nhân với expansionScale
-//    // (vì nó nằm tương đối so với tâm thực sự của gradient)
-//    Gdiplus::PointF centerPoint(rawFx, rawFy);
-//    transformMatrix.TransformPoints(&centerPoint, 1);
+//    Gdiplus::PointF focalPoint(rawFx, rawFy);
+//    finalMatrix.TransformPoints(&focalPoint, 1);
+//    pthGrBrush->SetCenterPoint(focalPoint);
 //
-//    // GDI+ yêu cầu CenterPoint nằm trong Path. Vì Path đã scale to 50 lần, điều này luôn đúng.
-//    pthGrBrush->SetCenterPoint(centerPoint);
-//
-//    // 4. Xử lý và Map lại màu sắc (Stops Remapping)
+//    // 5. Color Mapping & Padding (Double Padding: 0.0 và 1.0)
 //    struct StopData { REAL pos; Gdiplus::Color col; };
 //    std::vector<StopData> sortedStops;
 //
@@ -96,41 +190,31 @@
 //        BYTE a = (BYTE)(stop.getStopOpacity() * c.getA());
 //        Gdiplus::Color gdiColor(a, c.getR(), c.getG(), c.getB());
 //
-//        // Mapping Logic:
-//        // SVG Offset: 0.0 (Tâm) -> 1.0 (Rìa bán kính r gốc)
-//        // GDI Position: 1.0 (Tâm) -> 0.0 (Rìa bán kính 50*r)
-//        //
-//        // Công thức chuyển đổi:
-//        // Khoảng cách vật lý d = offset * r
-//        // Tỷ lệ trên brush mới t = d / (r * 50) = offset / 50
-//        // GDI Position = 1.0 - t = 1.0 - (offset / 50)
-//
+//        // Map: 1.0 (Center) -> 0.0 (Outer)
 //        REAL gdiPos = 1.0f - (stop.getOffset() / expansionScale);
-//
-//        // Clamp an toàn
 //        if (gdiPos > 1.0f) gdiPos = 1.0f;
 //        if (gdiPos < 0.0f) gdiPos = 0.0f;
 //
 //        sortedStops.push_back({ gdiPos, gdiColor });
 //    }
 //
-//    // 5. Thêm điểm dừng "Pad" (Mở rộng màu nền)
-//    // Để phần mở rộng (từ r đến 50*r) có màu của điểm cuối cùng (giả lập spreadMethod="pad")
-//    // ta tìm stop nằm xa tâm nhất (offset lớn nhất => gdiPos nhỏ nhất)
-//    if (!sortedStops.empty()) {
-//        auto minEl = std::min_element(sortedStops.begin(), sortedStops.end(),
-//            [](const StopData& a, const StopData& b) { return a.pos < b.pos; });
-//
-//        // Thêm một stop tại vị trí 0.0 (biên ngoài cùng của brush khổng lồ)
-//        // với màu giống hệt màu ngoài cùng của gradient gốc.
-//        sortedStops.push_back({ 0.0f, minEl->col });
-//    }
-//
-//    // GDI+ yêu cầu sắp xếp Position tăng dần (0 -> 1)
+//    // Sort để xử lý padding chính xác
 //    std::sort(sortedStops.begin(), sortedStops.end(),
 //        [](const StopData& a, const StopData& b) { return a.pos < b.pos; });
 //
-//    // Copy dữ liệu sang mảng để gán cho Brush
+//    if (!sortedStops.empty()) {
+//        // PADDING BIÊN (0.0): Nếu brush mở rộng ra ngoài vùng gradient gốc, tô màu stop cuối
+//        if (sortedStops.front().pos > 0.0001f) {
+//            sortedStops.insert(sortedStops.begin(), { 0.0f, sortedStops.front().col });
+//        }
+//        // PADDING TÂM (1.0): Nếu stop đầu tiên (offset 0) không ở 1.0 do scale, 
+//        // hoặc SVG không có offset 0, phải lấp đầy tâm.
+//        if (sortedStops.back().pos < 0.9999f) {
+//            sortedStops.push_back({ 1.0f, sortedStops.back().col });
+//        }
+//    }
+//
+//    // Convert sang mảng GDI+
 //    std::vector<Gdiplus::Color> finalColors;
 //    std::vector<REAL> finalPositions;
 //    for (const auto& s : sortedStops) {
@@ -140,187 +224,223 @@
 //
 //    pthGrBrush->SetInterpolationColors(finalColors.data(), finalPositions.data(), (int)finalColors.size());
 //
-//    // Không cần delete path vì Brush đã copy dữ liệu
 //    return pthGrBrush;
 //}
 
 #include "stdafx.h"
 #include "SVGRadialGradient.h"
+#include "SVGStop.h" // Đảm bảo include này
 #include <algorithm>
 #include <vector>
 #include <cmath>
+#include <sstream>
+#include <string>
 
-SVGRadialGradient::SVGRadialGradient() {
-    cx = 0.5f; cy = 0.5f; r = 0.5f;
-    fx = 0.5f; fy = 0.5f;
+using namespace std;
+
+// Helper: Parse số an toàn
+static float parseFloat(const string& str) {
+    if (str.empty()) return 0.0f;
+    string s = str;
+    for (char& c : s) if (c == ',') c = '.';
+    stringstream ss(s);
+    ss.imbue(std::locale::classic());
+    float val = 0;
+    ss >> val;
+    return val;
 }
 
-void SVGRadialGradient::parseAttributes(xml_node<>* node) {
-    SVGGradient::parseAttributes(node);
-
-    auto parseVal = [&](xml_attribute<>* attr, float defVal) {
-        if (!attr) return defVal;
-        string val = attr->value();
-        if (val.back() == '%') {
-            val.pop_back();
-            return (float)atof(val.c_str()) / 100.0f;
+// Helper: Parse Transform (Xoay tâm chuẩn)
+static void applyTransformString(Gdiplus::Matrix* matrix, const string& transStr) {
+    if (transStr.empty()) return;
+    matrix->Reset();
+    string s = transStr;
+    for (size_t i = 0; i < s.length(); ++i) {
+        char c = s[i];
+        if (c == ',' || c == '(' || c == ')') s[i] = ' ';
+        else if (c == '-' && i > 0 && (isdigit(s[i - 1]) || s[i - 1] == '.')) { s.insert(i, " "); i++; }
+    }
+    stringstream ss(s);
+    ss.imbue(std::locale::classic());
+    string token;
+    while (ss >> token) {
+        if (token == "matrix") {
+            float m[6]; for (int i = 0; i < 6; ++i) ss >> m[i];
+            Gdiplus::Matrix temp(m[0], m[1], m[2], m[3], m[4], m[5]);
+            matrix->Multiply(&temp, Gdiplus::MatrixOrderAppend);
         }
-        return (float)atof(val.c_str());
-        };
-
-    // Parse attributes
-    cx = parseVal(node->first_attribute("cx"), 0.5f);
-    cy = parseVal(node->first_attribute("cy"), 0.5f);
-    r = parseVal(node->first_attribute("r"), 0.5f);
-
-    // Nếu fx, fy không có, mặc định trùng với cx, cy
-    fx = parseVal(node->first_attribute("fx"), cx);
-    fy = parseVal(node->first_attribute("fy"), cy);
+        else if (token == "translate") {
+            float tx, ty = 0; ss >> tx; if (!(ss >> ty)) ty = 0;
+            matrix->Translate(tx, ty, Gdiplus::MatrixOrderAppend);
+        }
+        else if (token == "scale") {
+            float sx, sy; ss >> sx; if (!(ss >> sy)) sy = sx;
+            matrix->Scale(sx, sy, Gdiplus::MatrixOrderAppend);
+        }
+        else if (token == "rotate") {
+            float angle, cx = 0, cy = 0; ss >> angle;
+            streampos oldPos = ss.tellg();
+            if (ss >> cx >> cy) {
+                matrix->Translate(-cx, -cy, Gdiplus::MatrixOrderAppend);
+                matrix->Rotate(angle, Gdiplus::MatrixOrderAppend);
+                matrix->Translate(cx, cy, Gdiplus::MatrixOrderAppend);
+            }
+            else { ss.clear(); ss.seekg(oldPos); matrix->Rotate(angle, Gdiplus::MatrixOrderAppend); }
+        }
+        else if (token == "skewX") {
+            float angle; ss >> angle; matrix->Shear(tan(angle * 3.14159265f / 180.0f), 0, Gdiplus::MatrixOrderAppend);
+        }
+        else if (token == "skewY") {
+            float angle; ss >> angle; matrix->Shear(0, tan(angle * 3.14159265f / 180.0f), Gdiplus::MatrixOrderAppend);
+        }
+    }
 }
 
-// Hàm tính khoảng cách giữa 2 điểm
 static float distSq(const Gdiplus::PointF& p1, const Gdiplus::PointF& p2) {
     return (p1.X - p2.X) * (p1.X - p2.X) + (p1.Y - p2.Y) * (p1.Y - p2.Y);
 }
 
+SVGRadialGradient::SVGRadialGradient() {
+    cx = 0.5f; cy = 0.5f; r = 0.5f; fx = 0.5f; fy = 0.5f;
+}
+
+void SVGRadialGradient::parseAttributes(xml_node<>* node) {
+    // 1. Parse các thuộc tính cơ bản
+    SVGGradient::parseAttributes(node);
+
+    // 2. Tự parse Stops con (Sử dụng SVGStop đã sửa lỗi ở trên)
+    // Code này đảm bảo stops được đọc chính xác từ node hiện tại
+    if (node->first_node("stop")) {
+        stops.clear();
+        for (xml_node<>* child = node->first_node("stop"); child; child = child->next_sibling("stop")) {
+            SVGStop stop;
+            stop.parseAttributes(child); // Gọi hàm đã sửa ở file SVGStop.cpp
+            stops.push_back(stop);
+        }
+    }
+
+    // 3. Parse Attributes với parseFloat an toàn
+    auto parseVal = [&](xml_attribute<>* attr, float defVal) {
+        if (!attr) return defVal;
+        string val = attr->value();
+        // Trim spaces
+        size_t first = val.find_first_not_of(" \t\r\n");
+        if (string::npos != first) val = val.substr(first, val.find_last_not_of(" \t\r\n") - first + 1);
+
+        float f = 0;
+        if (!val.empty() && val.back() == '%') {
+            val.pop_back();
+            f = parseFloat(val) / 100.0f;
+        }
+        else {
+            f = parseFloat(val);
+        }
+        return f;
+        };
+
+    cx = parseVal(node->first_attribute("cx"), 0.5f);
+    cy = parseVal(node->first_attribute("cy"), 0.5f);
+    r = parseVal(node->first_attribute("r"), 0.5f);
+    fx = parseVal(node->first_attribute("fx"), cx);
+    fy = parseVal(node->first_attribute("fy"), cy);
+
+    if (xml_attribute<>* attr = node->first_attribute("gradientTransform")) {
+        if (!this->gradientTransform) this->gradientTransform = new Gdiplus::Matrix();
+        applyTransformString(this->gradientTransform, attr->value());
+    }
+}
+
 Gdiplus::Brush* SVGRadialGradient::createBrush(const Gdiplus::RectF& boundingBox) {
-    if (stops.empty()) {
-        return new Gdiplus::SolidBrush(Gdiplus::Color::Black);
+    if (stops.empty()) return new Gdiplus::SolidBrush(Gdiplus::Color::Black);
+
+    REAL rawCx = (REAL)cx; REAL rawCy = (REAL)cy; REAL rawR = (REAL)r;
+    REAL rawFx = (REAL)fx; REAL rawFy = (REAL)fy;
+
+    // Focal Point Clamping
+    REAL dx = rawFx - rawCx; REAL dy = rawFy - rawCy;
+    REAL dist = sqrt(dx * dx + dy * dy);
+    if (rawR > 0 && dist >= rawR * 0.999f) {
+        REAL scale = (rawR * 0.999f) / dist;
+        rawFx = rawCx + dx * scale; rawFy = rawCy + dy * scale;
     }
 
-    // 1. Xây dựng Ma trận biến đổi tổng hợp (Final Transformation Matrix)
-    // Ma trận này chuyển đổi từ toạ độ Gradient (0..1 hoặc userSpace) sang toạ độ Pixel màn hình.
+    // Matrix
     Gdiplus::Matrix finalMatrix;
-
-    // a. Áp dụng gradientTransform của SVG (nếu có)
-    if (gradientTransform) {
-        finalMatrix.Multiply(gradientTransform);
-    }
-
-    // b. Xử lý mapping vào BoundingBox (nếu là objectBoundingBox)
-    if (gradientUnits == "objectBoundingBox") {
-        // Lưu ý thứ tự nhân ma trận: Transform SVG -> Scale theo Box -> Dịch chuyển theo Box
-        // Sử dụng MatrixOrderAppend để nhân vào phía sau chuỗi biến đổi hiện tại
+    if (gradientTransform) finalMatrix.Multiply(gradientTransform);
+    if (gradientUnits != "userSpaceOnUse") {
         finalMatrix.Scale(boundingBox.Width, boundingBox.Height, Gdiplus::MatrixOrderAppend);
         finalMatrix.Translate(boundingBox.X, boundingBox.Y, Gdiplus::MatrixOrderAppend);
     }
 
-    // 2. TÍNH TOÁN HỆ SỐ MỞ RỘNG (DYNAMIC EXPANSION)
-    // Mục tiêu: Tìm xem hình chữ nhật (BoundingBox) khi chiếu ngược vào không gian Gradient
-    // thì nó nằm xa tâm (cx, cy) bao nhiêu.
-
+    // Dynamic Expansion (2.0x Safety)
     REAL expansionScale = 1.0f;
-    REAL rawCx = (REAL)cx;
-    REAL rawCy = (REAL)cy;
-    REAL rawR = (REAL)r;
-
-    // Tạo ma trận nghịch đảo để chiếu ngược điểm từ Pixel về Gradient Space
     Gdiplus::Matrix inverseMatrix;
     inverseMatrix.Multiply(&finalMatrix);
 
     if (inverseMatrix.Invert() == Gdiplus::Status::Ok) {
-        // Lấy 4 góc của BoundingBox
         Gdiplus::PointF corners[4] = {
             Gdiplus::PointF(boundingBox.X, boundingBox.Y),
             Gdiplus::PointF(boundingBox.X + boundingBox.Width, boundingBox.Y),
             Gdiplus::PointF(boundingBox.X, boundingBox.Y + boundingBox.Height),
             Gdiplus::PointF(boundingBox.X + boundingBox.Width, boundingBox.Y + boundingBox.Height)
         };
-
-        // Chiếu 4 góc này về không gian Gradient gốc
         inverseMatrix.TransformPoints(corners, 4);
-
-        // Tìm khoảng cách xa nhất từ tâm (cx, cy) đến 4 góc này
         float maxDistSq = 0.0f;
         Gdiplus::PointF centerP(rawCx, rawCy);
         for (int i = 0; i < 4; i++) {
             float d = distSq(centerP, corners[i]);
             if (d > maxDistSq) maxDistSq = d;
         }
-
-        float maxDist = sqrt(maxDistSq);
-
-        // Nếu điểm xa nhất nằm ngoài bán kính r, ta phải mở rộng brush
-        // Thêm một chút padding (1.01) để tránh lỗi làm tròn số ở viền
-        if (rawR > 0 && maxDist > rawR) {
-            expansionScale = (maxDist / rawR) * 1.01f;
-        }
+        if (rawR > 0 && sqrt(maxDistSq) > rawR) expansionScale = (sqrt(maxDistSq) / rawR) * 2.0f;
     }
-    else {
-        // Trường hợp hiếm: Ma trận không thể nghịch đảo (ví dụ scale = 0), dùng fallback an toàn
-        expansionScale = 2.0f;
-    }
+    else { expansionScale = 2.0f; }
 
-    // 3. Tạo GraphicsPath cho Brush
-    // Ta tạo một hình Ellipse tại toạ độ gốc nhưng với bán kính ĐÃ ĐƯỢC MỞ RỘNG
     Gdiplus::GraphicsPath path;
     REAL expandedR = rawR * expansionScale;
-
-    // Tạo hình tròn cơ sở
     path.AddEllipse(rawCx - expandedR, rawCy - expandedR, 2 * expandedR, 2 * expandedR);
-
-    // Biến đổi hình tròn này ra toạ độ màn hình bằng ma trận đã tính
     path.Transform(&finalMatrix);
 
-    // 4. Tạo PathGradientBrush
     Gdiplus::PathGradientBrush* pthGrBrush = new Gdiplus::PathGradientBrush(&path);
+    pthGrBrush->SetWrapMode(Gdiplus::WrapModeClamp);
+    pthGrBrush->SetGammaCorrection(TRUE);
 
-    // 5. Thiết lập điểm tiêu cự (Focal Point)
-    // Focal Point (fx, fy) cũng phải được transform ra toạ độ màn hình
-    Gdiplus::PointF focalPoint((REAL)fx, (REAL)fy);
+    Gdiplus::PointF focalPoint(rawFx, rawFy);
     finalMatrix.TransformPoints(&focalPoint, 1);
-
-    // SetCenterPoint trong GDI+ tương đương với Focal Point trong SVG (nơi bắt đầu màu offset=0)
     pthGrBrush->SetCenterPoint(focalPoint);
 
-    // 6. Map lại màu (Color Stops Remapping)
+    // Color Mapping
     struct StopData { REAL pos; Gdiplus::Color col; };
     std::vector<StopData> sortedStops;
-
     for (const auto& stop : stops) {
         SVGColor c = stop.getStopColor();
         BYTE a = (BYTE)(stop.getStopOpacity() * c.getA());
-        Gdiplus::Color gdiColor(a, c.getR(), c.getG(), c.getB());
-
-        // Công thức map màu khi đã mở rộng bán kính:
-        // Vị trí thực tế = offset gốc / tỷ lệ mở rộng
-        // Đảo ngược cho GDI+ (1.0 là tâm, 0.0 là biên)
         REAL gdiPos = 1.0f - (stop.getOffset() / expansionScale);
-
-        if (gdiPos > 1.0f) gdiPos = 1.0f;
-        if (gdiPos < 0.0f) gdiPos = 0.0f;
-
-        sortedStops.push_back({ gdiPos, gdiColor });
+        if (gdiPos > 1.0f) gdiPos = 1.0f; if (gdiPos < 0.0f) gdiPos = 0.0f;
+        sortedStops.push_back({ gdiPos, Gdiplus::Color(a, c.getR(), c.getG(), c.getB()) });
     }
+    std::sort(sortedStops.begin(), sortedStops.end(), [](const StopData& a, const StopData& b) { return a.pos < b.pos; });
 
-    // Xử lý PAD (Màu nền):
-    // Vì ta đã mở rộng brush ra quá bán kính gốc r, phần dư thừa cần được tô bằng màu cuối cùng.
-    // Màu cuối cùng (offset=1.0) sau khi map sẽ nằm ở vị trí (1.0 - 1.0/scale).
-    // Ta cần thêm một stop ở biên ngoài cùng (pos = 0.0) có màu giống màu đó.
+    // Padding
     if (!sortedStops.empty()) {
-        // Tìm stop có offset lớn nhất (tức là gdiPos nhỏ nhất)
-        auto minEl = std::min_element(sortedStops.begin(), sortedStops.end(),
-            [](const StopData& a, const StopData& b) { return a.pos < b.pos; });
-
-        // Nếu stop xa nhất chưa chạm tới biên (0.0), lấp đầy khoảng trống bằng màu đó
-        if (minEl->pos > 0.0001f) {
-            sortedStops.push_back({ 0.0f, minEl->col });
-        }
+        if (sortedStops.front().pos > 0.001f) sortedStops.insert(sortedStops.begin(), { 0.0f, sortedStops.front().col });
+        if (sortedStops.back().pos < 0.999f) sortedStops.push_back({ 1.0f, sortedStops.back().col });
     }
 
-    // Sắp xếp lại stops theo thứ tự tăng dần (bắt buộc của GDI+)
-    std::sort(sortedStops.begin(), sortedStops.end(),
-        [](const StopData& a, const StopData& b) { return a.pos < b.pos; });
-
-    // Copy sang mảng GDI+
     std::vector<Gdiplus::Color> finalColors;
     std::vector<REAL> finalPositions;
-    for (const auto& s : sortedStops) {
-        finalColors.push_back(s.col);
-        finalPositions.push_back(s.pos);
-    }
-
+    for (const auto& s : sortedStops) { finalColors.push_back(s.col); finalPositions.push_back(s.pos); }
     pthGrBrush->SetInterpolationColors(finalColors.data(), finalPositions.data(), (int)finalColors.size());
 
+    // Fix viền
+    if (!finalColors.empty()) {
+        int count = pthGrBrush->GetPointCount();
+        if (count > 0) {
+            Gdiplus::Color* surroundColors = new Gdiplus::Color[count];
+            Gdiplus::Color outerColor = finalColors[0];
+            for (int i = 0; i < count; i++) surroundColors[i] = outerColor;
+            pthGrBrush->SetSurroundColors(surroundColors, &count);
+            delete[] surroundColors;
+        }
+    }
     return pthGrBrush;
 }
