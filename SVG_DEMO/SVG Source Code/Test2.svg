@@ -1,0 +1,35 @@
+<svg width="600" height="400" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="600" height="400" fill="#f0f0f0" />
+
+  <text x="20" y="40" font-size="20" font-family="Arial" fill="black">1. Line Cap (Đầu mút)</text>
+  
+  <line x1="50" y1="80" x2="150" y2="80" stroke="black" stroke-width="1" />
+  <line x1="200" y1="80" x2="300" y2="80" stroke="black" stroke-width="1" />
+  <line x1="350" y1="80" x2="450" y2="80" stroke="black" stroke-width="1" />
+
+  <line x1="50" y1="80" x2="150" y2="80" stroke="blue" stroke-width="20" stroke-linecap="butt" opacity="0.6" />
+  <text x="70" y="110" font-size="14">butt</text>
+
+  <line x1="200" y1="80" x2="300" y2="80" stroke="blue" stroke-width="20" stroke-linecap="round" opacity="0.6" />
+  <text x="220" y="110" font-size="14">round</text>
+
+  <line x1="350" y1="80" x2="450" y2="80" stroke="blue" stroke-width="20" stroke-linecap="square" opacity="0.6" />
+  <text x="370" y="110" font-size="14">square</text>
+
+
+  <text x="20" y="160" font-size="20" font-family="Arial" fill="black">2. Line Join (Góc nối)</text>
+
+  <polyline points="50,250 100,200 150,250" stroke="red" stroke-width="25" fill="none" stroke-linejoin="miter" />
+  <text x="70" y="290" font-size="14">miter</text>
+
+  <polyline points="200,250 250,200 300,250" stroke="red" stroke-width="25" fill="none" stroke-linejoin="round" />
+  <text x="220" y="290" font-size="14">round</text>
+
+  <polyline points="350,250 400,200 450,250" stroke="red" stroke-width="25" fill="none" stroke-linejoin="bevel" />
+  <text x="370" y="290" font-size="14">bevel</text>
+
+  <text x="20" y="330" font-size="20" font-family="Arial" fill="black">3. Test Inline Style="..."</text>
+  
+  <path d="M 50 360 L 450 360" style="stroke: green; stroke-width: 15; stroke-linecap: round;" />
+
+</svg>
