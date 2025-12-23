@@ -161,33 +161,33 @@ void SVGPath::parsePathData(GraphicsPath& path)
     // 4. Vòng lặp parse
     while (!ss.eof())
     {
-        while (isspace(ss.peek())) ss.get();
-        if (ss.eof()) break;
+       while (isspace(ss.peek())) ss.get();
+       if (ss.eof()) break;
 
         char next = ss.peek();
         if (isalpha(next)) ss >> current;
 
         if (current == 'M') // MoveTo Absolute
-        {
-            if (ss >> x >> y) {
-                path.StartFigure();
+       {
+          if (ss >> x >> y) {
+               path.StartFigure();
                 lastPoint = PointF(x, y);
-                lastControlPoint = lastPoint; 
-                subPathStart = lastPoint;
-                current = 'L'; 
+              lastControlPoint = lastPoint; 
+               subPathStart = lastPoint;
+               current = 'L'; 
 
-            }
-        }
+           }
+       }
         else if (current == 'm') // MoveTo Relative
         {
             if (ss >> x >> y) {
                 path.StartFigure();
-                lastPoint = PointF(lastPoint.X + x, lastPoint.Y + y);
+               lastPoint = PointF(lastPoint.X + x, lastPoint.Y + y);
                 lastControlPoint = lastPoint;
-                subPathStart = lastPoint;
-                current = 'l';
+               subPathStart = lastPoint;
+               current = 'l';
             }
-        }
+       }
         else if (current == 'L') // LineTo Absolute
         {
             if (ss >> x >> y) {
